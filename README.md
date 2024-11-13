@@ -1,8 +1,7 @@
 # VISION DRIVE: Innovacion en movimiento
 
-<div align="center">
-  <img src="https://github.com/impatrq/visiondrive/blob/main/Redes%20Sociales/Logos/logowbg.JPG?raw=true" alt="Descripción de la imagen" width="400">
-</div>
+![Descripción de la imagen](Redes%20Sociales/Logos/logowbg(2).jpg)
+
 
 
 
