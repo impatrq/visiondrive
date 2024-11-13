@@ -1,6 +1,6 @@
 # VISION DRIVE: Innovacion en movimiento
 
-![Descripción de la imagen](images/imagen.png)
+![Descripción de la imagen](Redes%20Sociales/Logos/logowbg(2).jpg)
 
 
 
