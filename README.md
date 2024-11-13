@@ -1,5 +1,6 @@
 # VISION DRIVE: Innovacion en movimiento
 
+![Descripción de la imagen](https://github.com/impatrq/visiondrive/blob/main/ruta/a/imagen.png?raw=true)
 
 
 ## Descripción del Proyecto
