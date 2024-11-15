@@ -40,7 +40,8 @@
 ## Contacto
 
 - **Correo**: [Visiondriveimpa@gmail.com](mailto:visiondriveimpa@gmail.com)
-- **Instagram**: [@visiondrive24(https://www.instagram.com/visiondrive24/)
+- **Instagram**: (https://www.instagram.com/visiondrive24/)
+- **Linktree**: (https://linktr.ee/visiondrive_2024)
 
 
 
