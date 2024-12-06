@@ -1,197 +1,170 @@
-#define BLYNK_TEMPLATE_ID "TMPL2qhiOVqKL" 
-#define BLYNK_TEMPLATE_NAME "Prender y apagar"
-#define BLYNK_DEVICE_NAME "esp32"
+#define BLYNK_TEMPLATE_ID "TMPL2qhiOVqKL"
+#define BLYNK_TEMPLATE_NAME "Esp32"
 #define BLYNK_AUTH_TOKEN "z_WQQExctXxZYm90cLcXuyi1n2bwjFtm"
 
+#include <AccelStepper.h>
+#include <ESP32Servo.h>
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
 #include <PID_v1.h>
 
 // Pines físicos
-const int motorStepPin = 19;  // Pin de paso del motor paso a paso (freno)
-const int motorDirPin = 25;   // Pin de dirección del motor paso a paso
+const int stepPin = 19;       // Pin de paso del motor paso a paso (freno)
+const int dirPin = 25;        // Pin de dirección del motor paso a paso
+const int buttonPin = 14;     // Pin del fin de carrera para resetear freno
+const int speedSensorPin = 5; // Pin del sensor infrarrojo de velocidad
 const int lidarRXPin = 16;    // Pin RX del sensor LiDAR
 const int lidarTXPin = 17;    // Pin TX del sensor LiDAR
-const int speedSensorPin = 5; // Pin del sensor infrarrojo de velocidad
-const int buttonUpPin = 2;    // Botón para aumentar velocidad
-const int buttonDownPin = 3;  // Botón para reducir velocidad
-const int buttonStartPin = 12;// Botón de inicio del control de crucero
-const int buttonStopPin = 13; // Botón de parada del control de crucero
-const int finDeCarreraPin = 14; // Pin del fin de carrera para resetear freno
+const int servoPin = 18;      // Pin del servo
+const int ledPin = 2;         // LED integrado (GPIO 2)
 
-// Parámetros del motor paso a paso
-const int stepsPerRevolution = 6400; // 6400 micropasos por revolución (DM 556)
-const float avancePorVuelta = 1.905; // Avance del freno por vuelta de la varilla ACME (cm)
-const float maxFreno = 10.0;  // Recorrido máximo del freno (10 cm)
-
-// Control de velocidad del motor paso a paso
-const int fastSpeed = 40;     // Velocidad rápida del motor (en microsegundos)
-const int mediumSpeed = 80;   // Velocidad media del motor
-const int slowSpeed = 160;    // Velocidad lenta del motor
-
-// Parámetros PID para frenado
-double setPointDist, inputDist, outputFreno;
-double Kp = 2.0, Ki = 5.0, Kd = 1.0; // Ajusta estos valores para tu sistema
-PID frenadoPID(&inputDist, &outputFreno, &setPointDist, Kp, Ki, Kd, DIRECT);
-
-// Parámetros PID para control de velocidad
-double setPointVel, inputVel, outputVel;
-double KpVel = 1.0, KiVel = 0.5, KdVel = 0.1; // Ajusta estos valores para tu sistema
-PID velocidadPID(&inputVel, &outputVel, &setPointVel, KpVel, KiVel, KdVel, DIRECT);
-
-// Estado del sistema
-bool controlDeCrucero = false; // Indica si el control de crucero está activado
-int selectedSpeed = 0; // Velocidad seleccionada por el usuario
-int maxSpeed = 25; // Velocidad máxima en km/h (25 km/h)
-
-// Variables de velocidad y distancia
-int velocidadActual = 0;
-int distanciaSegura = 50; // Distancia mínima segura en cm para comenzar a frenar
-int distanciaAnterior = 0; // Para calcular la velocidad de acercamiento
-
-// Variables para LiDAR
-int dist;  // Distancia medida por el LiDAR
-unsigned long lastLidarTime = 0; // Última vez que se midió la distancia
-unsigned long lidarInterval = 100; // Intervalo de tiempo entre lecturas del LiDAR (en ms)
-
-// Variables para sensor infrarrojo (velocidad)
-unsigned long lastSpeedTime = 0; // Último tiempo registrado por el sensor
-unsigned long currentSpeedTime = 0;
-int numPulsos = 0; // Contador de pulsos para medir la velocidad
-
-// Distancias de seguridad según la velocidad seleccionada
-int distanciasSeguras[26] = {0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 
-                             55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 
-                             105, 110, 115, 120, 125}; // En cm, ajustar según sea necesario
-
-// Definición de pines virtuales Blynk
+// Blynk
 char auth[] = BLYNK_AUTH_TOKEN;
-char ssid[] = "Cooperadora Profesores";  // Nombre de tu red Wi-Fi
-char pass[] = "Profes_IMPA_2022";       // Contraseña de tu red Wi-Fi
+char ssid[] = "Cooperadora Profesores";
+char pass[] = "Profes_IMPA_2022";
 
+// Objetos
+AccelStepper stepper(AccelStepper::DRIVER, stepPin, dirPin); // Motor paso a paso
+Servo servo;                                                // Servo
 BlynkTimer timer;
 
-void setup() {
-  // Inicializar la comunicación serial
-  Serial.begin(9600);
-  Serial.println("Iniciando comunicación serial...");
-  
-  // Inicialización de la comunicación serial para LiDAR
-  Serial2.begin(115200, SERIAL_8N1, lidarRXPin, lidarTXPin); // Inicializar el HardwareSerial para el LiDAR
+// PID
+double velocidadDeseada = 0;    // Velocidad seleccionada (en km/h)
+double velocidadActual = 0;    // Velocidad medida (en km/h)
+double salidaPID = 90;         // Salida del controlador PID (ángulo del servo)
 
-  // Configurar pines de motor y botones
-  pinMode(motorStepPin, OUTPUT);
-  pinMode(motorDirPin, OUTPUT);
-  pinMode(buttonUpPin, INPUT_PULLUP);
-  pinMode(buttonDownPin, INPUT_PULLUP);
-  pinMode(buttonStartPin, INPUT_PULLUP);
-  pinMode(buttonStopPin, INPUT_PULLUP);
-  pinMode(finDeCarreraPin, INPUT_PULLUP);
+// *Valores iniciales ajustados para PID*
+// Nota: Estos valores son aproximados. Ajustarlos según las pruebas.
+double Kp = 1.5; // Proporcional: Respuesta inicial al error (más alto, más rápido responde)
+double Ki = 0.5; // Integral: Corrige errores acumulados (aumenta suavidad, pero puede oscilar)
+double Kd = 0.2; // Derivativo: Suaviza cambios rápidos (reduce oscilaciones)
 
-  // Inicializar los PID
-  frenadoPID.SetMode(AUTOMATIC);
-  velocidadPID.SetMode(AUTOMATIC);
+// Instancia del controlador PID
+PID miPID(&velocidadActual, &salidaPID, &velocidadDeseada, Kp, Ki, Kd, DIRECT);
 
-  // Conectar a Blynk
-  Blynk.begin(auth, ssid, pass);
+// Parámetros
+const float maxSpeed = 10000.0;          // Velocidad del motor paso a paso en pasos por segundo
+const float maxAcceleration = 5000.0;   // Aceleración del motor paso a paso
+const int stepsPerRevolution = 6400;    // Micropasos por revolución (DM556)
+const int vueltasFreno = 6;             // Avance fijo del freno en vueltas completas
+const int distanciasSeguras[] = {0, 30, 54, 63, 72, 81, 121, 187, 204, 221, 238, 
+                                  330, 418, 444, 470, 496, 606}; // Distancias mínimas seguras
 
-  // Configurar el temporizador de Blynk
-  timer.setInterval(100L, controlarBlynk);  // Llamar a la función cada 100 ms
-}
+// Variables de estado
+bool sistemaActivado = false;
+unsigned long pulsosSensor = 0;
+float distanciaActual = 0;
+bool finDeCarreraActivado = false;
 
-void loop() {
-  Blynk.run();  // Mantener la conexión de Blynk activa
-  timer.run();  // Ejecutar funciones del temporizador
-  Serial.println("Esperando señales...");  // Esto es para comprobar que el loop está ejecutándose
-}
-
-// Función que se llama periódicamente para controlar Blynk
-void controlarBlynk() {
-  // Controlar el crucero automático
-  if (controlDeCrucero) {
-    // Sensar velocidad actual y aplicar PID para aceleración
-    velocidadActual = medirVelocidad();
-    inputVel = velocidadActual;
-    velocidadPID.Compute();
-
-    // Sensar distancia y aplicar frenado
-    inputDist = medirDistanciaLidar();
-    setPointDist = calcularDistanciaSegura(selectedSpeed); // Calcular la distancia de frenado segura
-    frenadoPID.Compute();
-    aplicarFrenado(outputFreno); // Aplicar frenado proporcional
-  }
-}
-
-// Función para medir la velocidad actual (sensor infrarrojo)
-int medirVelocidad() {
-  if (digitalRead(speedSensorPin) == HIGH) {
-    numPulsos++;
-    currentSpeedTime = millis();
-    // Calcular la velocidad en base al tiempo y los pulsos (ajustar según el sensor)
-    unsigned long deltaTime = currentSpeedTime - lastSpeedTime;
-    lastSpeedTime = currentSpeedTime;
-    if (deltaTime > 0) {
-      velocidadActual = (142.5 / deltaTime) * numPulsos; // En cm/s, ajustar según los pulsos del sensor
-      numPulsos = 0;
-    }
-  }
-  return velocidadActual;
-}
-
-// Función para medir la distancia con el sensor LiDAR
-int medirDistanciaLidar() {
-  if (millis() - lastLidarTime >= lidarInterval) {
-    if (Serial2.available()) {
-      int count = 0;
-      while (Serial2.available()) {
-        int data = Serial2.read();
-        if (count == 2) {
-          dist = data;
-        } else if (count == 3) {
-          dist += (data << 8);
-        }
-        count++;
-      }
-      lastLidarTime = millis();
-    }
-  }
-  return dist; // Devolver la distancia medida en cm
-}
-
-// Función para aplicar el frenado
-void aplicarFrenado(double fuerzaFrenado) {
-  if (fuerzaFrenado > 0) {
-    digitalWrite(motorDirPin, HIGH); // Dirección de frenado
-    for (int i = 0; i < stepsPerRevolution * (fuerzaFrenado / avancePorVuelta); i++) {
-      digitalWrite(motorStepPin, HIGH);
-      delayMicroseconds(slowSpeed);
-      digitalWrite(motorStepPin, LOW);
-      delayMicroseconds(slowSpeed);
+// Función para medir velocidad
+void medirVelocidad() {
+  static unsigned long tiempoAnterior = 0;
+  unsigned long tiempoActual = millis();
+  if (digitalRead(speedSensorPin) == LOW) { // Sensor detecta pulso
+    pulsosSensor++;
+    if (pulsosSensor % 14 == 0) { // Cada 14 pulsos corresponde a 138 cm
+      float distancia = 1.38; // 138 cm en metros
+      float tiempo = (tiempoActual - tiempoAnterior) / 1000.0; // Tiempo en segundos
+      velocidadActual = (distancia / tiempo) * 3.6; // m/s a km/h
+      tiempoAnterior = tiempoActual;
     }
   }
 }
 
-// Función para resetear el freno
+// Función para medir distancia con LiDAR
+void medirDistanciaLidar() {
+  if (Serial2.available() > 0) {
+    distanciaActual = Serial2.read(); // Lee la distancia medida por LiDAR
+  }
+}
+
+// Función para frenar
+void aplicarFrenado() {
+  stepper.setMaxSpeed(maxSpeed);
+  stepper.setAcceleration(maxAcceleration);
+  int pasos = vueltasFreno * stepsPerRevolution; // 6 vueltas completas
+  stepper.moveTo(pasos);
+  stepper.runToPosition();
+}
+
+// Función para resetear freno
 void resetFreno() {
-  digitalWrite(motorDirPin, LOW); // Dirección para soltar el freno
-  for (int i = 0; i < stepsPerRevolution * (maxFreno / avancePorVuelta); i++) {
-    digitalWrite(motorStepPin, HIGH);
-    delayMicroseconds(fastSpeed);
-    digitalWrite(motorStepPin, LOW);
-    delayMicroseconds(fastSpeed);
+  stepper.setMaxSpeed(maxSpeed);
+  stepper.setAcceleration(maxAcceleration);
+  stepper.moveTo(0);
+  stepper.runToPosition();
+}
+
+// Control del servo
+void controlarServo(int angulo) {
+  servo.write(angulo);
+}
+
+// Control de crucero con PID
+void controlarCrucero() {
+  medirVelocidad();
+  medirDistanciaLidar();
+
+  if (sistemaActivado && !finDeCarreraActivado) {
+    // Calcula la salida del PID
+    miPID.Compute();
+
+    // Ajusta el servo según la salida del PID
+    controlarServo(salidaPID);
+
+    // Frenado en caso de emergencia por LiDAR
+    int distanciaSegura = distanciasSeguras[(int)velocidadDeseada];
+    if (distanciaActual < distanciaSegura) {
+      controlarServo(80); // Deja de acelerar
+      aplicarFrenado();   // Activa el freno
+    }
   }
 }
 
-// Función para calcular la distancia de frenado segura según la velocidad
-int calcularDistanciaSegura(int velocidad) {
-  if (velocidad > maxSpeed) velocidad = maxSpeed;
-  return distanciasSeguras[velocidad];
+// Blynk
+BLYNK_WRITE(V0) {
+  sistemaActivado = param.asInt();  // Actualiza el estado del sistema
+  if (sistemaActivado == 1) {
+    digitalWrite(ledPin, HIGH);  // Enciende el LED cuando V0 es 1
+    controlarServo(80));          // El servo se mueve a la posición inicial (90 grados)
+  } else {
+    digitalWrite(ledPin, LOW);   // Apaga el LED cuando V0 es 0
+    controlarServo(0);           // El servo se mueve a la posición opuesta (0 grados)
+    resetFreno();
+  }
 }
 
 BLYNK_WRITE(V1) {
-  selectedSpeed = param.asInt(); // Obtener la velocidad seleccionada desde Blynk
+  velocidadDeseada = param.asInt(); // Actualiza la velocidad deseada
 }
 
-BLYNK_WRITE(V2) {
-  controlDeCrucero = param.asInt(); // Activar/desactivar control de crucero
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, lidarRXPin, lidarTXPin);
+
+  pinMode(speedSensorPin, INPUT_PULLUP);
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(ledPin, OUTPUT); // Define el pin del LED como salida
+
+  stepper.setMaxSpeed(maxSpeed);
+  stepper.setAcceleration(maxAcceleration);
+  servo.attach(servoPin);
+
+  miPID.SetMode(AUTOMATIC);            // Activa el modo automático del PID
+  miPID.SetOutputLimits(0, 180);       // Limita la salida a los ángulos del servo
+
+  Blynk.begin(auth, ssid, pass);
+  timer.setInterval(100L, controlarCrucero);
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+
+  if (digitalRead(buttonPin) == LOW) {
+    finDeCarreraActivado = true;
+    sistemaActivado = false; // Apagar el sistema
+    Blynk.virtualWrite(V0, 0); // Actualizar en la app Blynk
+    digitalWrite(ledPin, LOW); // Asegura que el LED se apague
+  }
 }
